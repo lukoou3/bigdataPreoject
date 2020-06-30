@@ -142,6 +142,58 @@ Mode: leader
 [hadoop@hadoop103 kafka_2.11-0.11.0.2]$ bin/kafka-server-stop.sh stop
 ```
 
+### 关闭时的No kafka server to stop报错处理
+使用kafka-server-stop.sh命令关闭kafka服务，发现无法删除
+```
+[hadoop@hadoop101 ~]$ kafka-server-stop.sh stop
+No kafka server to stop
+```
+
+修改kafka-server-stop.sh
+```sh
+# 将
+PIDS=$(ps ax | grep -i 'kafka\.Kafka' | grep java | grep -v grep | awk '{print $1}')
+# 修改为
+PIDS=$(jps -lm | grep -i 'kafka.Kafka'| awk '{print $1}')
+```
+
+命令详解：使用jps -lm命令列出所有的java进程，然后通过管道，利用grep -i 'kafka.Kafka'命令将kafka进程筛出来，最后再接一管道命令，利用awk将进程号取出来。
+
+
+```
+[hadoop@hadoop101 ~]$ jps
+1296 QuorumPeerMain
+5291 Jps
+1598 Kafka
+[hadoop@hadoop101 ~]$ jps -lm | grep -i 'kafka.Kafka'| awk '{print $1}'
+1598
+```
+
+确实停止进程了：
+```sh
+[hadoop@hadoop101 ~]$ kafka-server-stop.sh stop
+[hadoop@hadoop101 ~]$ jps
+1296 QuorumPeerMain
+5402 Jps
+```
+
+
+修改之后的脚本：
+```sh
+#!/bin/sh
+#PIDS=$(ps ax | grep -i 'kafka\.Kafka' | grep java | grep -v grep | awk '{print $1}')
+PIDS=$(jps -lm | grep -i 'kafka.Kafka'| awk '{print $1}')
+
+if [ -z "$PIDS" ]; then
+  echo "No kafka server to stop"
+  exit 1
+else
+  kill -s TERM $PIDS
+fi
+
+```
+
+
 ## kafka命令测试
 ### 创建topic
 ```
