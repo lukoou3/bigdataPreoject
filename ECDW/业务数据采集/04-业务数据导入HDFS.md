@@ -578,6 +578,29 @@ esac
 [hadoop@hadoop101 sqoop]$ ./mysql_to_hdfs.sh all 2020-03-11
 ```
 
+第一个参数：first比all多执行了import_base_province、import_base_region两个函数，这两个表不会变化，只需导入一次就行。
+
+
+先生成数据，在导入数据：
+
+在配置文件application.properties中修改
+```
+#业务日期
+mock.date=2020-03-11
+#是否重置：是否清空之前的数据
+mock.clear=0
+```
+
+执行命令，生成2020-03-11日期数据：
+```
+[hadoop@hadoop101 db-log]$ java -jar /home/hadoop/bigdata-project/ecdw/db-log/gmall-mock-db-2020-03-16-SNAPSHOT.jar
+```
+
+```
+[hadoop@hadoop101 sqoop]$ ./mysql_to_hdfs.sh all 2020-03-11
+[hadoop@hadoop101 sqoop]$ /home/hadoop/bigdata-project/ecdw/sqoop/mysql_to_hdfs.sh all 2020-03-11
+```
+
 ### 项目经验
 Hive中的Null在底层是以“\N”来存储，而MySQL中的Null在底层就是Null，为了保证数据两端的一致性。在导出数据时采用--input-null-string和--input-null-non-string两个参数。导入数据时采用--null-string和--null-non-string。
 
