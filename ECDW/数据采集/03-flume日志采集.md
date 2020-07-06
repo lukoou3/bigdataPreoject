@@ -602,6 +602,186 @@ bin/kafka-console-consumer.sh --bootstrap-server hadoop101:9092,hadoop102:9092 -
 bin/kafka-console-consumer.sh --bootstrap-server hadoop101:9092,hadoop102:9092 --from-beginning --topic ecdw-event
 ```
 
+## 模拟生成每天的数据
+hadoop101、hadoop102下生成log数据
+```
+[hadoop@hadoop101 ecdw]$ ll
+total 16
+drwxrwxr-x 2 hadoop hadoop 4096 Jul  5 18:17 db-log
+drwxrwxr-x 6 hadoop hadoop 4096 Jul  3 06:54 ecdw-flume
+drwxrwxr-x 4 hadoop hadoop 4096 Jul  7 06:02 gene-log
+drwxrwxr-x 2 hadoop hadoop 4096 Jul  5 19:25 sqoop
+[hadoop@hadoop101 ecdw]$ cd gene-log/
+[hadoop@hadoop101 gene-log]$ ll
+total 8
+drwxrwxr-x 2 hadoop hadoop 4096 Jul  7 06:02 bin
+drwxrwxr-x 2 hadoop hadoop 4096 Jul  7 06:02 lib
+[hadoop@hadoop101 gene-log]$ cd ..
+[hadoop@hadoop101 ecdw]$ ll
+total 16
+drwxrwxr-x 2 hadoop hadoop 4096 Jul  5 18:17 db-log
+drwxrwxr-x 6 hadoop hadoop 4096 Jul  3 06:54 ecdw-flume
+drwxrwxr-x 4 hadoop hadoop 4096 Jul  7 06:02 gene-log
+drwxrwxr-x 2 hadoop hadoop 4096 Jul  5 19:25 sqoop
+[hadoop@hadoop101 ecdw]$ cd gene-log/
+[hadoop@hadoop101 gene-log]$ ll
+total 8
+drwxrwxr-x 2 hadoop hadoop 4096 Jul  7 06:02 bin
+drwxrwxr-x 2 hadoop hadoop 4096 Jul  7 06:02 lib
+[hadoop@hadoop101 gene-log]$ cat bin/gene_log.sh 
+#!/bin/sh
+
+for host in hadoop101 hadoop102
+do
+    ssh $host "java -classpath /home/hadoop/bigdata-project/ecdw/gene-log/lib/ecdw-logcollector-jar-with-dependencies.jar com.ecdw2.logcollector.appclient.AppMain $1 $2 >/dev/null 2>&1 &"
+done
+```
+第一个参数是生成每条日志的毫秒延时(默认0)，第二个参数是生成的日志条数(默认1000)。
+
+### 时间同步修改脚本
+集群时间同步修改脚本（非正规临时脚本）
+
+主要是为了模拟生成每天的行为日志。
+```
+[hadoop@hadoop101 bin]$ ll
+total 4
+-rwxrwxr-x 1 hadoop hadoop 240 Jul  7 06:02 gene_log.sh
+[hadoop@hadoop101 bin]$ vi dt.sh
+```
+内容：
+```
+#!/bin/bash
+
+for i in hadoop101 hadoop102 hadoop103
+do
+        echo "========== $i =========="
+        # 使用sudo要加上-t参数
+        ssh -t $i "sudo date -s $1"
+done
+```
+
+### 生成2020-03-10日志
+确保集群没有启动。
+
+修改时间：
+```
+[hadoop@hadoop101 bin]$ ll
+total 8
+-rwxrwxr-x 1 hadoop hadoop 174 Jul  7 06:16 dt.sh
+-rwxrwxr-x 1 hadoop hadoop 240 Jul  7 06:02 gene_log.sh
+[hadoop@hadoop101 bin]$ ./dt.sh 2020-03-10
+========== hadoop101 ==========
+[sudo] password for hadoop: 
+Tue Mar 10 00:00:00 CST 2020
+Connection to hadoop101 closed.
+========== hadoop102 ==========
+[sudo] password for hadoop: 
+Tue Mar 10 00:00:00 CST 2020
+Connection to hadoop102 closed.
+========== hadoop103 ==========
+[sudo] password for hadoop: 
+Tue Mar 10 00:00:00 CST 2020
+Connection to hadoop103 closed.
+[hadoop@hadoop101 bin]$ xcall date
+--------- hadoop101 ----------
+Tue Mar 10 00:00:17 CST 2020
+--------- hadoop102 ----------
+Tue Mar 10 00:00:14 CST 2020
+--------- hadoop103 ----------
+Tue Mar 10 00:00:11 CST 2020
+```
+
+启动集群:
+```
+# hadoop集群启动
+[hadoop@hadoop101 app-script]$ ./hadoop_cluster.sh start
+# zookeeper集群启动
+[hadoop@hadoop101 app-script]$ ./zookeeper_cluster.sh start
+[hadoop@hadoop101 app-script]$ ./zookeeper_cluster.sh status
+# kafka集群启动
+[hadoop@hadoop101 app-script]$ ./kafka_cluster.sh start
+```
+
+启动flume
+```
+[hadoop@hadoop103 ecdw-flume]$ bin/start_kafka_hdfs_agent.sh
+[hadoop@hadoop102 ecdw-flume]$ bin/start_log_kafka_agent.sh
+[hadoop@hadoop101 ecdw-flume]$ bin/start_log_kafka_agent.sh
+```
+
+生成日志：
+```
+# 生成1000条
+[hadoop@hadoop101 bin]$ ./gene_log.sh 
+# 再生成9000条
+[hadoop@hadoop101 bin]$ ./gene_log.sh 0 9000
+```
+
+tomcat目录：
+```
+[hadoop@hadoop101 module]$ cd tomcat/logs/ecdw/
+[hadoop@hadoop101 ecdw]$ ll
+total 0
+[hadoop@hadoop101 ecdw]$ ll
+total 684
+-rw-rw-r-- 1 hadoop hadoop 696951 Mar 10 00:11 app-2020-03-10.log
+[hadoop@hadoop101 ecdw]$ wc -l app-2020-03-10.log 
+1000 app-2020-03-10.log
+[hadoop@hadoop101 ecdw]$ wc -l app-2020-03-10.log 
+9842 app-2020-03-10.log
+[hadoop@hadoop101 ecdw]$ wc -l app-2020-03-10.log 
+10000 app-2020-03-10.log
+```
+
+![](assets/markdown-img-paste-20200706223804538.png)
+
+停止flume后
+![](assets/markdown-img-paste-20200706224125582.png)
+
+### 生成2020-03-11日志
+停止集群，修改时间，生成2020-03-11日志。
+```
+# flume
+[hadoop@hadoop101 ecdw-flume]$ bin/stop_log_kafka_agent.sh
+[hadoop@hadoop102 ecdw-flume]$ bin/stop_log_kafka_agent.sh
+[hadoop@hadoop103 ecdw-flume]$ bin/stop_kafka_hdfs_agent.sh
+
+# 停止集群
+[hadoop@hadoop101 app-script]$ ./kafka_cluster.sh stop
+[hadoop@hadoop101 app-script]$ ./zookeeper_cluster.sh stop
+[hadoop@hadoop101 app-script]$ ./hadoop_cluster.sh stop
+
+# 修改时间
+[hadoop@hadoop101 bin]$ ./dt.sh 2020-03-11
+
+# 启动集群
+[hadoop@hadoop101 app-script]$ ./hadoop_cluster.sh start
+[hadoop@hadoop101 app-script]$ ./zookeeper_cluster.sh start
+[hadoop@hadoop101 app-script]$ ./zookeeper_cluster.sh status
+[hadoop@hadoop101 app-script]$ ./kafka_cluster.sh start
+
+# 启动flume
+[hadoop@hadoop103 ecdw-flume]$ bin/start_kafka_hdfs_agent.sh
+[hadoop@hadoop102 ecdw-flume]$ bin/start_log_kafka_agent.sh
+[hadoop@hadoop101 ecdw-flume]$ bin/start_log_kafka_agent.sh
+
+# 生成10000条日志，10ms的延时对于10000条日志还是挺多的，下次不延时了
+[hadoop@hadoop101 bin]$ ./gene_log.sh 10 10000
+
+# 不延时
+[hadoop@hadoop101 bin]$ ./gene_log.sh 0 10000
+```
+
+日志都生成了
+```
+[hadoop@hadoop101 ecdw]$ xcall wc -l `pwd`/app-2020-03-11.log
+--------- hadoop101 ----------
+10000 /opt/module/tomcat/logs/ecdw/app-2020-03-11.log
+--------- hadoop102 ----------
+10000 /opt/module/tomcat/logs/ecdw/app-2020-03-11.log
+--------- hadoop103 ----------
+wc: /opt/module/tomcat/logs/ecdw/app-2020-03-11.log: No such file or directory
+```
 
 
 ```
