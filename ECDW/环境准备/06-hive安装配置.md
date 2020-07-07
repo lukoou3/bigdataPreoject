@@ -84,7 +84,7 @@ export HIVE_CONF_DIR=/opt/module/hive-2.3.6/conf
 
 
 ### 创建配置hive-site.xml
-在/opt/module/hive/conf路径上，创建hive-site.xml文件
+在/opt/module/hive-2.3.6/conf路径上，创建hive-site.xml文件
 ```
 [hadoop@hadoop101 conf]$ vi hive-site.xml
 ```
