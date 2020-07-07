@@ -214,7 +214,7 @@ load data inpath '/origin_data/gmall/log/topic_event/2020-03-10' overwrite into 
 
 查看一下数据
 ```sql
-select * from ods_event_log limit 5;
+select * from ods_event_log limit 2;
 ```
 
 为lzo压缩文件创建索引
