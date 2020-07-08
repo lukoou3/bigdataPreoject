@@ -222,9 +222,59 @@ select * from ods_event_log limit 2;
 hadoop jar /opt/module/hadoop-2.7.2/share/hadoop/common/hadoop-lzo-0.4.20.jar com.hadoop.compression.lzo.DistributedLzoIndexer /warehouse/gmall/ods/ods_event_log/dt=2020-03-10
 ```
 
+## ODS层加载数据脚本
+hive-mr-script目录用于存放数据仓库计算的脚本。
 
+创建hdfs_to_ods_log.sh执行加载hdfs行为日志到hive ods层的脚本。
+```
+[hadoop@hadoop101 ecdw]$ mkdir hive-mr-script
+[hadoop@hadoop101 ecdw]$ cd hive-mr-script/
+[hadoop@hadoop101 hive-mr-script]$ vi hdfs_to_ods_log.sh
+```
 
+内容：
+```sh
+#!/bin/bash
+
+hadoop_home=/opt/module/hadoop-2.7.2
+hive_home=/opt/module/hive-2.3.6
+hive_db=gmall
+
+# 如果是输入的日期按照取输入日期；如果没输入日期取当前时间的前一天
+if [[ -n "$1" ]]; then
+    do_date=$1
+else
+    do_date=`date -d '-1 day' +%F`
+fi
+
+echo "===日志日期为 $do_date==="
+
+sql="
+use $hive_db;
+
+load data inpath '/origin_data/gmall/log/topic_start/$do_date' overwrite into table ods_start_log partition(dt='$do_date');
+
+load data inpath '/origin_data/gmall/log/topic_event/$do_date' overwrite into table ods_event_log partition(dt='$do_date');
+"
+
+#echo "$sql"
+
+$hive_home/bin/hive -e "$sql"
+
+$hadoop_home/bin/hadoop jar $hadoop_home/share/hadoop/common/hadoop-lzo-0.4.20.jar com.hadoop.compression.lzo.DistributedLzoIndexer /warehouse/gmall/ods/ods_start_log/dt=$do_date
+$hadoop_home/bin/hadoop jar $hadoop_home/share/hadoop/common/hadoop-lzo-0.4.20.jar com.hadoop.compression.lzo.DistributedLzoIndexer /warehouse/gmall/ods/ods_event_log/dt=$do_date
 
 ```
 
+脚本测试：
 ```
+[hadoop@hadoop101 hive-mr-script]$ ./hdfs_to_ods_log.sh  2020-03-11
+```
+
+查看导入数据
+```sql
+hive (gmall)> select count(*) from ods_start_log where dt='2020-03-11';
+hive (gmall)> select count(*) from ods_event_log where dt='2020-03-11';
+```
+
+
