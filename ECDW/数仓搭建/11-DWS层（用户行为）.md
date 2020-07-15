@@ -72,8 +72,5 @@ select * from dws_uv_detail_daycount where dt='2020-03-10' limit 5;
 ```
 
 ## DWS层（用户行为）导入数据脚本
+ DWS层用户行为和业务表共用一个脚本，见业务章节。
 
-
-```sql
-
-```

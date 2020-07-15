@@ -133,7 +133,7 @@ group by user_id;
 ```
 查看：
 ```sql
-select * from dwd_dim_sku_info where dt='2020-03-10' limit 2;
+select * from dws_user_action_daycount where dt='2020-03-10' limit 2;
 ```
 
 #### 方式二
@@ -208,7 +208,7 @@ group by user_id;
 
 查看：
 ```sql
-select * from dwd_dim_sku_info where dt='2020-03-10' limit 2;
+select * from dws_user_action_daycount where dt='2020-03-10' limit 2;
 ```
 
 ## 每日商品行为
@@ -259,7 +259,7 @@ with tmp_order as(
     where dt = '2020-03-10'
     group by sku_id
 ),
-with tmp_payment as(
+tmp_payment as(
     -- 订单事实表（累积型快照事实表）
     -- 查询今天和昨天的数据：防止昨天24点左右下单，今天支付。in子查询也可以使用join实现相同的效果。
     select
@@ -277,7 +277,7 @@ with tmp_payment as(
     )
     group by sku_id
 ),
-with tmp_refund as(
+tmp_refund as(
     -- 退款事实表（事务型快照事实表）
     select
         sku_id,
@@ -288,17 +288,17 @@ with tmp_refund as(
     where dt = '2020-03-10'
     group by sku_id
 ),
-with tmp_cart as(
+tmp_cart as(
     -- 加购事实表（周期型快照事实表，每日快照）
     select
         sku_id,
         count(1) cart_count,
         sum(sku_num) cart_num
-    from dwd_fact_order_refund_info
+    from dwd_fact_cart_info
     where dt = '2020-03-10' and date_format(create_time, 'yyyy-MM-dd') = '2020-03-10'
     group by sku_id
 ),
-with tmp_favor as(
+tmp_favor as(
     -- 收藏事实表（周期型快照事实表，每日快照）
     select
         sku_id,
@@ -307,7 +307,7 @@ with tmp_favor as(
     where dt = '2020-03-10' and date_format(create_time, 'yyyy-MM-dd') = '2020-03-10'
     group by sku_id
 ),
-with tmp_appraise as(
+tmp_appraise as(
     -- 评价事实表（事务型快照事实表）
     select
         sku_id,
@@ -341,7 +341,7 @@ select
     sum(appraise_default_count) appraise_default_count
 from(
     select
-        sku_id
+        sku_id,
         order_count,
         order_num,
         order_amount,
@@ -361,7 +361,7 @@ from(
     from tmp_order
     union all
     select
-        sku_id
+        sku_id,
         0 order_count,
         0 order_num,
         0 order_amount,
@@ -381,7 +381,7 @@ from(
     from tmp_payment
     union all
     select
-        sku_id
+        sku_id,
         0 order_count,
         0 order_num,
         0 order_amount,
@@ -401,7 +401,7 @@ from(
     from tmp_refund
     union all
     select
-        sku_id
+        sku_id,
         0 order_count,
         0 order_num,
         0 order_amount,
@@ -421,7 +421,7 @@ from(
     from tmp_cart
     union all
     select
-        sku_id
+        sku_id,
         0 order_count,
         0 order_num,
         0 order_amount,
@@ -441,7 +441,7 @@ from(
     from tmp_favor
     union all
     select
-        sku_id
+        sku_id,
         0 order_count,
         0 order_num,
         0 order_amount,
@@ -469,6 +469,10 @@ select * from dwd_dim_sku_info where dt='2020-03-10' limit 2;
 ```
 
 #### 方式二
+**dwd_fact_cart_info的sku_num字段为string，union all要求每列的类型一致，前面的方式使用sum(sku_num)会转换string**
+
+这个使用cast转换成int，结果显示整数型，方式一使用sum结果显示小数型，方式三使用sku_num*1结果显示小数型。
+
 
 ```sql
 insert overwrite table dws_sku_action_daycount
@@ -494,7 +498,7 @@ select
 from(
     -- 订单明细事实表（事务型快照事实表）
     select
-        sku_id
+        sku_id,
         1 order_count,
         sku_num order_num,
         total_amount order_amount,
@@ -517,7 +521,7 @@ from(
     -- 订单事实表（累积型快照事实表）
     -- 查询今天和昨天的数据：防止昨天24点左右下单，今天支付。in子查询也可以使用join实现相同的效果。
     select
-        sku_id
+        sku_id,
         0 order_count,
         0 order_num,
         0 order_amount,
@@ -545,7 +549,7 @@ from(
     union all
     -- 退款事实表（事务型快照事实表）
     select
-        sku_id
+        sku_id,
         0 order_count,
         0 order_num,
         0 order_amount,
@@ -566,8 +570,9 @@ from(
     where dt = '2020-03-10'
     union all
     -- 加购事实表（周期型快照事实表，每日快照）
+    -- -- dwd_fact_cart_info的sku_num字段为string，union all要求每列的类型一致，前面的方式使用sum(sku_num)会转换string
     select
-        sku_id
+        sku_id,
         0 order_count,
         0 order_num,
         0 order_amount,
@@ -578,18 +583,18 @@ from(
         0 refund_num,
         0 refund_amount,
         1 cart_count,
-        sku_num cart_num,
+        cast(sku_num as int) cart_num,
         0 favor_count,
         0 appraise_good_count,
         0 appraise_mid_count,
         0 appraise_bad_count,
         0 appraise_default_count
-    from dwd_fact_order_refund_info
+    from dwd_fact_cart_info
     where dt = '2020-03-10' and date_format(create_time, 'yyyy-MM-dd') = '2020-03-10'
     union all
     -- 收藏事实表（周期型快照事实表，每日快照）
     select
-        sku_id
+        sku_id,
         0 order_count,
         0 order_num,
         0 order_amount,
@@ -611,7 +616,7 @@ from(
     union all
     -- 评价事实表（事务型快照事实表）
     select
-        sku_id
+        sku_id,
         0 order_count,
         0 order_num,
         0 order_amount,
@@ -639,8 +644,10 @@ group by sku_id;
 select * from dwd_dim_sku_info where dt='2020-03-10' limit 2;
 ```
 
-### 方式三
+#### 方式三
 这个和方式二个差不多，就是把方式二的前两个union all合起来应该会提高一点效率，不过得使用join代替之前的in子查询。
+
+**dwd_fact_cart_info的sku_num字段为string，union all要求每列的类型一致，前面的方式使用sum(sku_num)会转换string**
 ```sql
 insert overwrite table dws_sku_action_daycount
 partition(dt='2020-03-10')
@@ -668,7 +675,7 @@ from(
     -- 订单事实表（累积型快照事实表）
     -- 查询今天和昨天的数据：防止昨天24点左右下单，今天支付。
     select
-        sku_id
+        sku_id,
         1 order_count,
         sku_num order_num,
         total_amount order_amount,
@@ -704,7 +711,7 @@ from(
     union all
     -- 退款事实表（事务型快照事实表）
     select
-        sku_id
+        sku_id,
         0 order_count,
         0 order_num,
         0 order_amount,
@@ -725,8 +732,9 @@ from(
     where dt = '2020-03-10'
     union all
     -- 加购事实表（周期型快照事实表，每日快照）
+    -- dwd_fact_cart_info的sku_num字段为string，union all要求每列的类型一致，前面的方式使用sum(sku_num)会转换string
     select
-        sku_id
+        sku_id,
         0 order_count,
         0 order_num,
         0 order_amount,
@@ -737,18 +745,18 @@ from(
         0 refund_num,
         0 refund_amount,
         1 cart_count,
-        sku_num cart_num,
+        sku_num * 1 cart_num,
         0 favor_count,
         0 appraise_good_count,
         0 appraise_mid_count,
         0 appraise_bad_count,
         0 appraise_default_count
-    from dwd_fact_order_refund_info
+    from dwd_fact_cart_info
     where dt = '2020-03-10' and date_format(create_time, 'yyyy-MM-dd') = '2020-03-10'
     union all
     -- 收藏事实表（周期型快照事实表，每日快照）
     select
-        sku_id
+        sku_id,
         0 order_count,
         0 order_num,
         0 order_amount,
@@ -770,7 +778,7 @@ from(
     union all
     -- 评价事实表（事务型快照事实表）
     select
-        sku_id
+        sku_id,
         0 order_count,
         0 order_num,
         0 order_amount,
@@ -1241,11 +1249,416 @@ left join(
 select * from dwd_dim_sku_info where dt='2020-03-10' limit 2;
 ```
 
-## DWS层（业务数据）导入数据脚本
+## DWS层导入数据脚本
+DWS层用户行为和业务表共用一个脚本。
+
+创建dwd_to_dws.sh 导入dws的数据。
+```
+[hadoop@hadoop101 hive-mr-script]$ vi dwd_to_dws.sh
+```
+
+内容：
+```sh
+#!/bin/bash
+
+hive=/opt/module/hive-2.3.6/bin/hive
+hive_db=gmall
+
+# 如果是输入的日期按照取输入日期；如果没输入日期取当前时间的前一天
+if [[ -n "$1" ]]; then
+    do_date=$1
+else
+    do_date=`date -d '-1 day' +%F`
+fi
+
+if [ ${#do_date} -ne 10 ];then
+    echo "日期格式不正确"
+    exit
+fi
+
+echo "===日志日期为 $do_date==="
+
+# 每日设备行为
+insert_dws_uv_detail_daycount="
+insert overwrite table dws_uv_detail_daycount
+partition(dt='$do_date')
+select
+    mid_id,
+    concat_ws('|', collect_set(user_id)) user_id,
+    concat_ws('|', collect_set(version_code)) version_code,
+    concat_ws('|', collect_set(version_name)) version_name,
+    concat_ws('|', collect_set(lang)) lang,
+    concat_ws('|', collect_set(source)) source,
+    concat_ws('|', collect_set(os)) os,
+    concat_ws('|', collect_set(area)) area,
+    concat_ws('|', collect_set(model)) model,
+    concat_ws('|', collect_set(brand)) brand,
+    concat_ws('|', collect_set(sdk_version)) sdk_version,
+    concat_ws('|', collect_set(gmail)) gmail,
+    concat_ws('|', collect_set(height_width)) height_width,
+    concat_ws('|', collect_set(app_time)) app_time,
+    concat_ws('|', collect_set(network)) network,
+    concat_ws('|', collect_set(lng)) lng,
+    concat_ws('|', collect_set(lat)) lat,
+    count(1) login_count
+from dwd_start_log
+where dt = '$do_date'
+group by mid_id;
+"
+
+# 每日会员行为
+insert_dws_user_action_daycount="
+with tmp_login as(
+    -- 登录次数从启动日志中统计
+    select
+        user_id,
+        count(1) login_count
+    from dwd_start_log
+    where dt = '$do_date' and user_id is not null
+    group by user_id
+),
+tmp_cart as(
+    -- 加购事实表为周期型快照事实表，每日快照。所以要在where中过滤当天的数据
+    select
+        user_id,
+        count(1) cart_count,
+        sum(cart_price * sku_num) cart_amount
+    from dwd_fact_cart_info
+    where dt = '$do_date' and date_format(create_time,'yyyy-MM-dd') = '$do_date' and user_id is not null
+    group by user_id
+),
+tmp_order as(
+    --订单事实表（累积型快照事实表）
+    select
+        user_id,
+        count(1) order_count,
+        sum(final_total_amount) order_amount
+    from dwd_fact_order_info
+    where dt = '$do_date'
+    group by user_id
+),
+tmp_payment as(
+    --支付事实表（事务型快照事实表）
+    select
+        user_id,
+        count(1) payment_count,
+        sum(payment_amount) payment_amount
+    from dwd_fact_payment_info
+    where dt = '$do_date'
+    group by user_id
+)
+insert overwrite table dws_user_action_daycount
+partition(dt='$do_date')
+select
+    user_id,
+    sum(login_count) login_count,
+    sum(cart_count) cart_count,
+    sum(cart_amount) cart_amount,
+    sum(order_count) order_count,
+    sum(order_amount) order_amount,
+    sum(payment_count) payment_count,
+    sum(payment_amount) payment_amount
+from(
+    select
+        user_id,
+        login_count,
+        0 cart_count,
+        0 cart_amount,
+        0 order_count,
+        0 order_amount,
+        0 payment_count,
+        0 payment_amount
+    from tmp_login
+    union all
+    select
+        user_id,
+        0 login_count,
+        cart_count,
+        cart_amount,
+        0 order_count,
+        0 order_amount,
+        0 payment_count,
+        0 payment_amount
+    from tmp_cart
+    union all
+    select
+        user_id,
+        0 login_count,
+        0 cart_count,
+        0 cart_amount,
+        order_count,
+        order_amount,
+        0 payment_count,
+        0 payment_amount
+    from tmp_order
+    union all
+    select
+        user_id,
+        0 login_count,
+        0 cart_count,
+        0 cart_amount,
+        0 order_count,
+        0 order_amount,
+        payment_count,
+        payment_amount
+    from tmp_payment
+) user_actions
+group by user_id;
+"
+
+# 每日商品行为
+insert_dws_sku_action_daycount="
+insert overwrite table dws_sku_action_daycount
+partition(dt='$do_date')
+select
+    sku_id,
+    sum(order_count) order_count,
+    sum(order_num) order_num,
+    sum(order_amount) order_amount,
+    sum(payment_count) payment_count,
+    sum(payment_num) payment_num,
+    sum(payment_amount) payment_amount,
+    sum(refund_count) refund_count,
+    sum(refund_num) refund_num,
+    sum(refund_amount) refund_amount,
+    sum(cart_count) cart_count,
+    sum(cart_num) cart_num,
+    sum(favor_count) favor_count,
+    sum(appraise_good_count) appraise_good_count,
+    sum(appraise_mid_count) appraise_mid_count,
+    sum(appraise_bad_count) appraise_bad_count,
+    sum(appraise_default_count) appraise_default_count
+from(
+    --使用left join下单和支付一起统计
+    -- 订单明细事实表（事务型快照事实表）
+    -- 订单事实表（累积型快照事实表）
+    -- 查询今天和昨天的数据：防止昨天24点左右下单，今天支付。
+    select
+        sku_id,
+        1 order_count,
+        sku_num order_num,
+        total_amount order_amount,
+        if(op.id is not null, 1, 0) payment_count,
+        if(op.id is not null, sku_num, 0) payment_num,
+        if(op.id is not null, total_amount, 0) payment_amount,
+        0 refund_count,
+        0 refund_num,
+        0 refund_amount,
+        0 cart_count,
+        0 cart_num,
+        0 favor_count,
+        0 appraise_good_count,
+        0 appraise_mid_count,
+        0 appraise_bad_count,
+        0 appraise_default_count
+    from(
+        select
+            order_id,
+            sku_id,
+            sku_num,
+            total_amount
+        from dwd_fact_order_detail
+        where dt = '$do_date'
+    ) od
+    left join(
+        select
+            id
+        from dwd_fact_order_info
+        where (dt = '$do_date' or dt = date_sub('$do_date', 1)) 
+        and date_format(payment_time, 'yyyy-MM-dd') = '$do_date'
+    ) op on od.order_id = op.id
+    union all
+    -- 退款事实表（事务型快照事实表）
+    select
+        sku_id,
+        0 order_count,
+        0 order_num,
+        0 order_amount,
+        0 payment_count,
+        0 payment_num,
+        0 payment_amount,
+        1 refund_count,
+        refund_num refund_num,
+        refund_amount refund_amount,
+        0 cart_count,
+        0 cart_num,
+        0 favor_count,
+        0 appraise_good_count,
+        0 appraise_mid_count,
+        0 appraise_bad_count,
+        0 appraise_default_count
+    from dwd_fact_order_refund_info
+    where dt = '$do_date'
+    union all
+    -- 加购事实表（周期型快照事实表，每日快照）
+    -- dwd_fact_cart_info的sku_num字段为string，union all要求每列的类型一致，前面的方式使用sum(sku_num)会转换string
+    select
+        sku_id,
+        0 order_count,
+        0 order_num,
+        0 order_amount,
+        0 payment_count,
+        0 payment_num,
+        0 payment_amount,
+        0 refund_count,
+        0 refund_num,
+        0 refund_amount,
+        1 cart_count,
+        sku_num * 1 cart_num,
+        0 favor_count,
+        0 appraise_good_count,
+        0 appraise_mid_count,
+        0 appraise_bad_count,
+        0 appraise_default_count
+    from dwd_fact_cart_info
+    where dt = '$do_date' and date_format(create_time, 'yyyy-MM-dd') = '$do_date'
+    union all
+    -- 收藏事实表（周期型快照事实表，每日快照）
+    select
+        sku_id,
+        0 order_count,
+        0 order_num,
+        0 order_amount,
+        0 payment_count,
+        0 payment_num,
+        0 payment_amount,
+        0 refund_count,
+        0 refund_num,
+        0 refund_amount,
+        0 cart_count,
+        0 cart_num,
+        1 favor_count,
+        0 appraise_good_count,
+        0 appraise_mid_count,
+        0 appraise_bad_count,
+        0 appraise_default_count
+    from dwd_fact_favor_info
+    where dt = '$do_date' and date_format(create_time, 'yyyy-MM-dd') = '$do_date'
+    union all
+    -- 评价事实表（事务型快照事实表）
+    select
+        sku_id,
+        0 order_count,
+        0 order_num,
+        0 order_amount,
+        0 payment_count,
+        0 payment_num,
+        0 payment_amount,
+        0 refund_count,
+        0 refund_num,
+        0 refund_amount,
+        0 cart_count,
+        0 cart_num,
+        0 favor_count,
+        if(appraise='1201', 1, 0) appraise_good_count,
+        if(appraise='1202', 1, 0) appraise_mid_count,
+        if(appraise='1203', 1, 0) appraise_bad_count,
+        if(appraise='1204', 1, 0) appraise_default_count
+    from dwd_fact_comment_info
+    where dt = '$do_date'
+) user_actions
+group by sku_id;
+"
+
+# 每日购买行为
+insert_dws_sale_detail_daycount="
+insert overwrite table dws_sale_detail_daycount
+partition(dt='$do_date')
+select
+    op.user_id,
+    op.sku_id,
+    ui.gender,
+    months_between('$do_date', ui.birthday)/12 age,
+    ui.user_level,
+    si.price,
+    si.sku_name,
+    si.tm_id,
+    si.category3_id,
+    si.category2_id,
+    si.category1_id,
+    si.category3_name,
+    si.category2_name,
+    si.category1_name,
+    si.spu_id,
+    op.sku_num,
+    op.order_count,
+    op.order_amount
+from(
+    -- 订单明细事实表（事务型快照事实表）
+    -- 这个统计度量值，其他的都是维度关联
+    select
+        user_id,
+        sku_id,
+        sum(sku_num) sku_num,--购买个数
+        count(1) order_count,--当日下单单数
+        sum(total_amount) order_amount --当日下单金额
+    from dwd_fact_order_detail
+    where dt = '$do_date'
+    group by user_id, sku_id
+) op
+left join(
+    -- 关联用户信息。用户维度表（拉链表）
+    select
+        id,
+        gender,
+        birthday,
+        user_level
+    from dwd_dim_user_info_his
+    where end_date = '9999-99-99'
+) ui on op.user_id = ui.id
+left join(
+    -- 关联商品信息。商品维度表（全量表）
+    select
+        id,
+        price,
+        sku_name,
+        tm_id,
+        category3_id,
+        category2_id,
+        category1_id,
+        category3_name,
+        category2_name,
+        category1_name,
+        spu_id
+    from dwd_dim_sku_info
+    where dt = '$do_date'
+)si on op.sku_id = si.id;
+"
+
+sql="
+use $hive_db;
+
+-- insert_table:每日设备行为
+$insert_dws_uv_detail_daycount
+
+-- insert_table:每日会员行为
+$insert_dws_user_action_daycount
+
+-- insert_table:每日商品行为
+$insert_dws_sku_action_daycount
+
+-- insert_table:每日购买行为
+$insert_dws_sale_detail_daycount
+"
+
+#echo "$sql"
+
+$hive -e "$sql"
+```
 
 
+脚本测试：
+```
+[hadoop@hadoop101 hive-mr-script]$ ./dwd_to_dws.sh 2020-03-11
+```
+
+
+查看导入数据
 ```sql
-
+/opt/module/hive-2.3.6/bin/hive -e "select * from gmall.dws_uv_detail_daycount where dt='2020-03-11' limit 5;"
+/opt/module/hive-2.3.6/bin/hive -e "select * from gmall.dws_user_action_daycount where dt='2020-03-11' limit 5;"
+/opt/module/hive-2.3.6/bin/hive -e "select * from gmall.dws_sku_action_daycount where dt='2020-03-11' limit 5;"
+/opt/module/hive-2.3.6/bin/hive -e "select * from gmall.dws_sale_detail_daycount where dt='2020-03-11' limit 5;"
 ```
 
 
