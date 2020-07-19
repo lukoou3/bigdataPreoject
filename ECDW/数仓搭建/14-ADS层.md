@@ -1,5 +1,7 @@
 ads层的数据列式存储和压缩都没必要用。
 
+不是分区表，不用insert overwrite而是使用insert into每次追加插入数据。
+
 # 设备主题
 
 ## 活跃设备数（日、周、月）
@@ -26,18 +28,25 @@ location '/warehouse/gmall/ads/ads_uv_count/';
 ```
 
 ### 导入数据
-这一从dwt层直接统计出，十分方便!
+这一从dwt层直接统计出，十分方便！这个只能当天查询，不能查询之前某个时间段的用户数，因为是通过用户最后一次的登录时间判断的。
 ```sql
 insert into table ads_uv_count
 select
     '2020-03-10' dt,
     sum(if(login_day_count>0, 1, 0)) day_count,
-    sum(if(login_date_last>=date_add(next_date('2020-03-10','MON'), -7), 1, 0)) wk_count,
-    sum(if(login_day_count>=date_format('2020-03-10','yyyy-MM-01'), 1, 0)) mn_count,
-    if(day_of_week('2020-03-10')=1, 'Y', 'N') is_weekend,
+    sum(if(login_date_last>=date_add(next_day('2020-03-10','MON'), -7), 1, 0)) wk_count,
+    sum(if(login_date_last>=date_format('2020-03-10','yyyy-MM-01'), 1, 0)) mn_count,
+    -- 周日是1、周一是2、周六是7
+    if(dayofweek('2020-03-10')=1, 'Y', 'N') is_weekend,
     if(last_day('2020-03-10')='2020-03-10', 'Y', 'N')is_monthend
 from dwt_uv_topic;
 ```
+
+查询：
+```sql
+select * from ads_uv_count limit 5;
+```
+
 
 ## 每日新增设备
 
@@ -67,10 +76,15 @@ from dwt_uv_topic;
 -- 或者：
 insert into table ads_new_mid_count
 select
-    login_date_first create_date,
+    '2020-03-10' create_date,
     count(1) new_mid_count
 from dwt_uv_topic
 where login_date_first='2020-03-10';
+```
+
+查询：
+```sql
+select * from ads_new_mid_count limit 5;
 ```
 
 ## 沉默用户数
@@ -131,7 +145,7 @@ location '/warehouse/gmall/ads/ads_back_count';
 insert into table ads_back_count
 select
     '2020-03-10' dt,
-    concat(date_add(next_date('2020-03-10','MON'), -7), '_', date_add(next_date('2020-03-10','MON'), -1)) wk_dt,
+    concat(date_add(next_day('2020-03-10','MON'), -7), '_', date_add(next_day('2020-03-10','MON'), -1)) wk_dt,
     count(1) back_count
 from(
     select
@@ -141,16 +155,16 @@ from(
         select
             mid_id
         from dwt_uv_topic
-        where login_date_last >= date_add(next_date('2020-03-10','MON'), -7) 
-            and login_date_first < date_add(next_date('2020-03-10','MON'), -7) 
+        where login_date_last >= date_add(next_day('2020-03-10','MON'), -7) 
+            and login_date_first < date_add(next_day('2020-03-10','MON'), -7) 
     ) current_wk
     left join(
         -- 上周活跃的设备（不能从dwt中取数据，因为取的是上周活跃的设备，而不是从上周到现在活跃的设备）
         select
             mid_id
         from dws_uv_detail_daycount
-        where dt >= date_add(next_date('2020-03-10','MON'), -14) 
-            and dt <= date_add(next_date('2020-03-10','MON'), -8)
+        where dt >= date_add(next_day('2020-03-10','MON'), -14) 
+            and dt <= date_add(next_day('2020-03-10','MON'), -8)
         group by mid_id
     ) last_wk on current_wk.mid_id = last_wk.mid_id
     where last_wk.mid_id is null
@@ -160,26 +174,26 @@ from(
 insert into table ads_back_count
 select
     '2020-03-10' dt,
-    concat(date_add(next_date('2020-03-10','MON'), -7), '_', date_add(next_date('2020-03-10','MON'), -1)) wk_dt,
+    concat(date_add(next_day('2020-03-10','MON'), -7), '_', date_add(next_day('2020-03-10','MON'), -1)) wk_dt,
     count(1) back_count
 from(
     -- 本周活跃的设备、减去本周新增设备
     select
         mid_id
     from dwt_uv_topic
-    where login_date_last >= date_add(next_date('2020-03-10','MON'), -7) 
-        and login_date_first < date_add(next_date('2020-03-10','MON'), -7) 
+    where login_date_last >= date_add(next_day('2020-03-10','MON'), -7) 
+        and login_date_first < date_add(next_day('2020-03-10','MON'), -7) 
 ) current_wk
 left join(
     -- 上周活跃的设备（不能从dwt中取数据，因为取的是上周活跃的设备，而不是从上周到现在活跃的设备）
     select
         mid_id
     from dws_uv_detail_daycount
-    where dt >= date_add(next_date('2020-03-10','MON'), -14) 
-        and dt <= date_add(next_date('2020-03-10','MON'), -8)
+    where dt >= date_add(next_day('2020-03-10','MON'), -14) 
+        and dt <= date_add(next_day('2020-03-10','MON'), -8)
     group by mid_id
 ) last_wk on current_wk.mid_id = last_wk.mid_id
-where last_wk.mid_id is null
+where last_wk.mid_id is null;
 ```
 
 ## 流失用户数
@@ -207,7 +221,7 @@ select
     '2020-03-10' dt,
     count(1) wastage_count
 from dwt_uv_topic
-where login_date_last < date_sub('2020-03-10', 7);
+where login_date_last <= date_sub('2020-03-10', 7);
 ```
 
 ## 留存率
@@ -228,6 +242,7 @@ where login_date_last < date_sub('2020-03-10', 7);
 ### 建表语句
 ```sql
 drop table if exists ads_user_retention_day_rate;
+
 create external table ads_user_retention_day_rate 
 (
      `stat_date`          string comment '统计日期',
@@ -272,6 +287,11 @@ select
 from dwt_uv_topic;
 ```
 
+查询：
+```sql
+select * from ads_user_retention_day_rate limit 5;
+```
+
 ## 最近连续三周活跃用户数
 
 ### 建表语句
@@ -292,8 +312,8 @@ location '/warehouse/gmall/ads/ads_continuity_wk_count';
 ```sql
 insert into table ads_continuity_wk_count
 select
-    '2020-03-10' dt
-    concat(date_sub(next_day('2020-03-10', 'MON'), 21), '_', date_sub(next_day('2020-03-10', 'MON'), 1)) wk_dt
+    '2020-03-10' dt,
+    concat(date_sub(next_day('2020-03-10', 'MON'), 21), '_', date_sub(next_day('2020-03-10', 'MON'), 1)) wk_dt,
     count(1) continuity_count
 from(
     select
@@ -301,10 +321,10 @@ from(
     from(
         select
             mid_id,
-            date_sub(next_day('2020-03-10', 'MON'), 7) wk
+            date_sub(next_day(dt, 'MON'), 7) wk
         from dws_uv_detail_daycount
         where dt >= date_sub(next_day('2020-03-10', 'MON'), 21) and dt <= date_sub(next_day('2020-03-10', 'MON'), 1)
-        group by mid_id, wk
+        group by mid_id, date_sub(next_day(dt, 'MON'), 7)
     ) u_wk
     group by mid_id
     having count(1) = 3
@@ -313,8 +333,8 @@ from(
 -- 或者
 insert into table ads_continuity_wk_count
 select
-    '2020-03-10' dt
-    concat(date_sub(next_day('2020-03-10', 'MON'), 21), '_', date_sub(next_day('2020-03-10', 'MON'), 1)) wk_dt
+    '2020-03-10' dt,
+    concat(date_sub(next_day('2020-03-10', 'MON'), 21), '_', date_sub(next_day('2020-03-10', 'MON'), 1)) wk_dt,
     count(1) continuity_count
 from(
     select
@@ -363,8 +383,8 @@ location '/warehouse/gmall/ads/ads_continuity_uv_count';
 ```sql
 insert into table ads_continuity_uv_count
 select
-    '2020-03-10' dt
-    concat(date_sub('2020-03-10', 6), '_', '2020-03-10') wk_dt
+    '2020-03-10' dt,
+    concat(date_sub('2020-03-10', 6), '_', '2020-03-10') wk_dt,
     count(1) continuity_count
 from(
     -- 这里还需要取下重，在周期内一个用户可能多次连续3天活跃
@@ -396,8 +416,8 @@ from(
 -- 或者
 insert into table ads_continuity_uv_count
 select
-    '2020-03-10' dt
-    concat(date_sub('2020-03-10', 6), '_', '2020-03-10') wk_dt
+    '2020-03-10' dt,
+    concat(date_sub('2020-03-10', 6), '_', '2020-03-10') wk_dt,
     count(1) continuity_count
 from(
     -- 这里还需要取下重，在周期内一个用户可能多次连续3天活跃
@@ -413,7 +433,7 @@ from(
                 -- 这个语法是不对的
                 -- date_sub(dt, row_number()) over(partition by mid_id order by dt) date_diff,
                 -- 可以这样
-                datediff(dt, '1970-01-01') - row_number() over(partition by mid_id order by dt) date_diff,
+                datediff(dt, '1970-01-01') - row_number() over(partition by mid_id order by dt) date_diff
             from dws_uv_detail_daycount
             where dt >= date_sub('2020-03-10', 6) and dt <= '2020-03-10'
         ) t1
@@ -542,7 +562,7 @@ from(
 join (
     -- 总的访问人数直接从dws中去取
     select
-        dt,
+        '2020-03-10' dt,
         count(1) total_visitor_m_count
     from dws_uv_detail_daycount
     where dt = '2020-03-10'
@@ -567,7 +587,7 @@ from(
         if(payment_count>0, 1, 0) payment_count
     from dws_user_action_daycount
     where dt = '2020-03-10'
-    unoin all
+    union all
     select
         1 uv_count,
         0 cart_count,
@@ -786,7 +806,7 @@ location '/warehouse/gmall/ads/ads_appraise_bad_topN';
 
 ### 导入数据
 ```sql
-insert into table ads_product_cart_topN
+insert into table ads_appraise_bad_topN
 select
     '2020-03-10' dt,
     sku_id,
@@ -919,7 +939,7 @@ select
     sum(if(order_count>=1, 1, 0)) buycount,
     sum(if(order_count>=2, 1, 0)) buy_twice_last,
     sum(if(order_count>=2, 1, 0))/sum(if(order_count>=1, 1, 0)) buy_twice_last_ratio,
-    sum(if(order_count>=3, 1, 0)) buy_3times_last
+    sum(if(order_count>=3, 1, 0)) buy_3times_last,
     sum(if(order_count>=3, 1, 0))/sum(if(order_count>=1, 1, 0)) buy_3times_last_ratio,
     date_format('2020-03-10', 'yyyy-MM') stat_mn,
     '2020-03-10' stat_date
@@ -932,7 +952,7 @@ from(
         user_id,
         sum(order_count) order_count
     from dws_sale_detail_daycount
-    where dt >= date_format('2020-03-10', 'yyyy-MM-01') and dt <= last_date('2020-03-10')
+    where dt >= date_format('2020-03-10', 'yyyy-MM-01') and dt <= last_day('2020-03-10')
     group by sku_tm_id,sku_category1_id,sku_category1_name,user_id
 ) t
 group by sku_tm_id,sku_category1_id,sku_category1_name;
