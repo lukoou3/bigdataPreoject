@@ -2,6 +2,8 @@ ads层的数据列式存储和压缩都没必要用。
 
 不是分区表，不用insert overwrite而是使用insert into每次追加插入数据。
 
+[toc]
+
 # 设备主题
 
 ## 活跃设备数（日、周、月）
@@ -257,6 +259,48 @@ location '/warehouse/gmall/ads/ads_user_retention_day_rate/';
 ```
 
 ### 导入数据
+先使用这个，下面那个hive每次生成多个文件夹，使用sqoop导出时会报目录路径不是一个文件（sqoop导出只是支持hdfs导出，并不是支持hive表的导出）。
+```sql
+insert into table ads_user_retention_day_rate
+select
+    stat_date,
+    create_date,
+    retention_day,
+    max(retention_count),
+    max(new_mid_count),
+    max(retention_ratio)
+from(
+    select
+        '2020-03-10' stat_date,
+        date_sub('2020-03-10', 3) create_date,
+        3 retention_day,
+        sum(if(login_date_first=date_sub('2020-03-10', 3) and login_day_count>0, 1, 0)) retention_count,
+        sum(if(login_date_first=date_sub('2020-03-10', 3), 1, 0)) new_mid_count,
+        sum(if(login_date_first=date_sub('2020-03-10', 3) and login_day_count>0, 1, 0)) / sum(if(login_date_first=date_sub('2020-03-10', 3), 1, 0)) retention_ratio
+    from dwt_uv_topic
+    union all
+    select
+        '2020-03-10' stat_date,
+        date_sub('2020-03-10', 2) create_date,
+        2 retention_day,
+        sum(if(login_date_first=date_sub('2020-03-10', 2) and login_day_count>0, 1, 0)) retention_count,
+        sum(if(login_date_first=date_sub('2020-03-10', 2), 1, 0)) new_mid_count,
+        sum(if(login_date_first=date_sub('2020-03-10', 2) and login_day_count>0, 1, 0)) / sum(if(login_date_first=date_sub('2020-03-10', 2), 1, 0)) retention_ratio
+    from dwt_uv_topic
+    union all
+    select
+        '2020-03-10' stat_date,
+        date_sub('2020-03-10', 1) create_date,
+        1 retention_day,
+        sum(if(login_date_first=date_sub('2020-03-10', 1) and login_day_count>0, 1, 0)) retention_count,
+        sum(if(login_date_first=date_sub('2020-03-10', 1), 1, 0)) new_mid_count,
+        sum(if(login_date_first=date_sub('2020-03-10', 1) and login_day_count>0, 1, 0)) / sum(if(login_date_first=date_sub('2020-03-10', 1), 1, 0)) retention_ratio
+    from dwt_uv_topic
+) t
+group by stat_date,create_date,retention_day;
+```
+
+
 ```sql
 insert into table ads_user_retention_day_rate
 select
@@ -536,7 +580,7 @@ join (
         dt,
         day_count total_visitor_m_count
     from ads_uv_count
-    where dt = '2020-03-10'
+    where dt = '2020-03-10' limit 1
 ) uv on ua.dt=uv.dt;
 
 -- 或者
@@ -956,5 +1000,486 @@ from(
     group by sku_tm_id,sku_category1_id,sku_category1_name,user_id
 ) t
 group by sku_tm_id,sku_category1_id,sku_category1_name;
+```
+
+## ADS层导入数据脚本
+创建dws_dwt_to_ads.sh 导入ads的数据。
+```
+[hadoop@hadoop101 hive-mr-script]$ vi dws_dwt_to_ads.sh
+```
+
+内容：
+```sh
+#!/bin/bash
+
+hive=/opt/module/hive-2.3.6/bin/hive
+hive_db=gmall
+
+# 如果是输入的日期按照取输入日期；如果没输入日期取当前时间的前一天
+if [[ -n "$1" ]]; then
+    do_date=$1
+else
+    do_date=`date -d '-1 day' +%F`
+fi
+
+if [ ${#do_date} -ne 10 ];then
+    echo "日期格式不正确"
+    exit
+fi
+
+echo "===日志日期为 $do_date==="
+
+# 活跃设备数（日、周、月）
+insert_ads_uv_count="
+insert into table ads_uv_count
+select
+    '$do_date' dt,
+    sum(if(login_day_count>0, 1, 0)) day_count,
+    sum(if(login_date_last>=date_add(next_day('$do_date','MON'), -7), 1, 0)) wk_count,
+    sum(if(login_date_last>=date_format('$do_date','yyyy-MM-01'), 1, 0)) mn_count,
+    -- 周日是1、周一是2、周六是7
+    if(dayofweek('$do_date')=1, 'Y', 'N') is_weekend,
+    if(last_day('$do_date')='$do_date', 'Y', 'N')is_monthend
+from dwt_uv_topic;
+"
+
+# 每日新增设备
+insert_ads_new_mid_count="
+insert into table ads_new_mid_count
+select
+    '$do_date' create_date,
+    count(1) new_mid_count
+from dwt_uv_topic
+where login_date_first='$do_date';
+"
+
+# 沉默用户数
+insert_ads_silent_count="
+insert into table ads_silent_count
+select
+    '$do_date' dt,
+    count(1) silent_count
+from dwt_uv_topic
+where login_date_first=login_date_last and login_date_first <= date_sub('$do_date', 7);
+"
+
+# 本周回流用户数
+insert_ads_back_count="
+insert into table ads_back_count
+select
+    '$do_date' dt,
+    concat(date_add(next_day('$do_date','MON'), -7), '_', date_add(next_day('$do_date','MON'), -1)) wk_dt,
+    count(1) back_count
+from(
+    -- 本周活跃的设备、减去本周新增设备
+    select
+        mid_id
+    from dwt_uv_topic
+    where login_date_last >= date_add(next_day('$do_date','MON'), -7) 
+        and login_date_first < date_add(next_day('$do_date','MON'), -7) 
+) current_wk
+left join(
+    -- 上周活跃的设备（不能从dwt中取数据，因为取的是上周活跃的设备，而不是从上周到现在活跃的设备）
+    select
+        mid_id
+    from dws_uv_detail_daycount
+    where dt >= date_add(next_day('$do_date','MON'), -14) 
+        and dt <= date_add(next_day('$do_date','MON'), -8)
+    group by mid_id
+) last_wk on current_wk.mid_id = last_wk.mid_id
+where last_wk.mid_id is null;
+"
+
+# 流失用户数
+insert_ads_wastage_count="
+insert into table ads_wastage_count
+select
+    '$do_date' dt,
+    count(1) wastage_count
+from dwt_uv_topic
+where login_date_last <= date_sub('$do_date', 7);
+"
+
+# 留存率
+insert_ads_user_retention_day_rate="
+insert into table ads_user_retention_day_rate
+select
+    '$do_date' stat_date,
+    date_sub('$do_date', 3) create_date,
+    3 retention_day,
+    sum(if(login_date_first=date_sub('$do_date', 3) and login_day_count>0, 1, 0)) retention_count,
+    sum(if(login_date_first=date_sub('$do_date', 3), 1, 0)) new_mid_count,
+    sum(if(login_date_first=date_sub('$do_date', 3) and login_day_count>0, 1, 0)) / sum(if(login_date_first=date_sub('$do_date', 3), 1, 0)) retention_ratio
+from dwt_uv_topic
+union all
+select
+    '$do_date' stat_date,
+    date_sub('$do_date', 2) create_date,
+    2 retention_day,
+    sum(if(login_date_first=date_sub('$do_date', 2) and login_day_count>0, 1, 0)) retention_count,
+    sum(if(login_date_first=date_sub('$do_date', 2), 1, 0)) new_mid_count,
+    sum(if(login_date_first=date_sub('$do_date', 2) and login_day_count>0, 1, 0)) / sum(if(login_date_first=date_sub('$do_date', 2), 1, 0)) retention_ratio
+from dwt_uv_topic
+union all
+select
+    '$do_date' stat_date,
+    date_sub('$do_date', 1) create_date,
+    1 retention_day,
+    sum(if(login_date_first=date_sub('$do_date', 1) and login_day_count>0, 1, 0)) retention_count,
+    sum(if(login_date_first=date_sub('$do_date', 1), 1, 0)) new_mid_count,
+    sum(if(login_date_first=date_sub('$do_date', 1) and login_day_count>0, 1, 0)) / sum(if(login_date_first=date_sub('$do_date', 1), 1, 0)) retention_ratio
+from dwt_uv_topic;
+"
+
+# 最近连续三周活跃用户数
+insert_ads_continuity_wk_count="
+insert into table ads_continuity_wk_count
+select
+    '$do_date' dt,
+    concat(date_sub(next_day('$do_date', 'MON'), 21), '_', date_sub(next_day('$do_date', 'MON'), 1)) wk_dt,
+    count(1) continuity_count
+from(
+    select
+        mid_id
+    from(
+        select
+            mid_id,
+            date_sub(next_day(dt, 'MON'), 7) wk
+        from dws_uv_detail_daycount
+        where dt >= date_sub(next_day('$do_date', 'MON'), 21) and dt <= date_sub(next_day('$do_date', 'MON'), 1)
+        group by mid_id, date_sub(next_day(dt, 'MON'), 7)
+    ) u_wk
+    group by mid_id
+    having count(1) = 3
+) u;
+"
+
+# 最近七天内连续三天活跃用户数
+insert_ads_continuity_uv_count="
+insert into table ads_continuity_uv_count
+select
+    '$do_date' dt,
+    concat(date_sub('$do_date', 6), '_', '$do_date') wk_dt,
+    count(1) continuity_count
+from(
+    -- 这里还需要取下重，在周期内一个用户可能多次连续3天活跃
+    select
+        mid_id
+    from(
+        select
+            mid_id,
+            date_diff
+        from(
+            select
+                mid_id,
+                date_sub(dt, rank) date_diff
+            from(
+                select
+                    mid_id,
+                    dt,
+                    row_number() over(partition by mid_id order by dt) rank
+                from dws_uv_detail_daycount
+                where dt >= date_sub('$do_date', 6) and dt <= '$do_date'
+            ) t1
+        ) t2
+        group by mid_id, date_diff
+        having count(1) >= 3
+    ) t3
+    group by mid_id
+) u;
+"
+
+# 会员主题信息
+insert_ads_user_topic="
+insert into table ads_user_topic
+select
+    '$do_date' dt,
+    sum(if(login_date_last='$do_date', 1, 0)) day_users,
+    sum(if(login_date_first='$do_date', 1, 0)) day_new_users,
+    sum(if(payment_date_first='$do_date', 1, 0)) day_new_payment_users,
+    sum(if(payment_count>0, 1, 0)) payment_users,
+    count(1) users,
+    sum(if(login_date_last='$do_date', 1, 0))/count(1) day_users2users,
+    sum(if(payment_count>0, 1, 0))/count(1) payment_users2users,
+    sum(if(login_date_first='$do_date', 1, 0))/sum(if(login_date_last='$do_date', 1, 0)) day_new_users2users
+from dwt_user_topic;
+"
+
+# 漏斗分析
+insert_ads_user_action_convert_day="
+insert into table ads_user_action_convert_day
+select
+    '$do_date' dt,
+    total_visitor_m_count,
+    cart_u_count,
+    cart_u_count/total_visitor_m_count visitor2cart_convert_ratio,
+    order_u_count,
+    order_u_count/cart_u_count cart2order_convert_ratio,
+    payment_u_count,
+    payment_u_count/order_u_count order2payment_convert_ratio
+from(
+    select
+        '$do_date' dt,
+        sum(if(cart_count>0, 1, 0)) cart_u_count,
+        sum(if(order_count>0, 1, 0)) order_u_count,
+        sum(if(payment_count>0, 1, 0)) payment_u_count
+    from dws_user_action_daycount
+    where dt = '$do_date'
+) ua
+join (
+    -- 总的访问人数直接从ads中去取
+    select
+        dt,
+        day_count total_visitor_m_count
+    from ads_uv_count
+    where dt = '$do_date' limit 1
+) uv on ua.dt=uv.dt;
+"
+
+# 商品个数信息
+insert_ads_product_info="
+insert into table ads_product_info
+select
+    '$do_date' dt,
+    sku_num,
+    spu_num
+from(
+    select
+        '$do_date' dt,
+        count(1) sku_num
+    from dwt_sku_topic
+) sku
+join(
+    select
+        '$do_date' dt,
+        count(1) spu_num
+    from (
+        select
+            spu_id
+        from dwt_sku_topic
+        group by spu_id
+    ) t
+) spu on sku.dt= spu.dt;
+"
+
+# 商品销量排名
+insert_ads_product_sale_topN="
+insert into table ads_product_sale_topN
+select
+    '$do_date' dt,
+    sku_id,
+    payment_amount
+from dws_sku_action_daycount
+where dt = '$do_date'
+order by payment_amount desc
+limit 10;
+"
+
+# 商品收藏排名
+insert_ads_product_favor_topN="
+insert into table ads_product_favor_topN
+select
+    '$do_date' dt,
+    sku_id,
+    favor_count
+from dws_sku_action_daycount
+where dt = '$do_date'
+order by favor_count desc
+limit 10;
+"
+
+# 商品加入购物车排名
+insert_ads_product_cart_topN="
+insert into table ads_product_cart_topN
+select
+    '$do_date' dt,
+    sku_id,
+    cart_num
+from dws_sku_action_daycount
+where dt = '$do_date'
+order by cart_num desc
+limit 10;
+"
+
+# 商品退款率排名(最近30天)
+insert_ads_product_refund_topN="
+insert into table ads_product_refund_topN
+select
+    '$do_date',
+    sku_id,
+    refund_last_30d_count/payment_last_30d_count*100 refund_ratio
+from dwt_sku_topic
+-- order by中可以使用select中计算后的值
+order by refund_ratio desc
+limit 10;
+"
+
+# 商品差评率排名
+insert_ads_appraise_bad_topN="
+insert into table ads_appraise_bad_topN
+select
+    '$do_date' dt,
+    sku_id,
+    appraise_bad_count/(appraise_good_count+appraise_mid_count+appraise_bad_count+appraise_default_count) appraise_bad_ratio
+from dws_sku_action_daycount
+where dt = '$do_date'
+-- order by中可以使用select中计算后的值
+order by appraise_bad_ratio desc
+limit 10;
+"
+
+# 下单数目统计
+insert_ads_order_daycount="
+insert into table ads_order_daycount
+select
+    '$do_date' dt,
+    sum(order_count) order_count,
+    sum(order_amount) order_amount,
+    sum(if(order_count>0, 1, 0)) order_users
+from dws_user_action_daycount
+where dt = '$do_date';
+"
+
+# 支付信息统计
+insert_ads_payment_daycount="
+insert into table ads_payment_daycount
+select
+    '$do_date' dt,
+    payment_count,
+    payment_amount,
+    payment_user_count,
+    payment_sku_count,
+    payment_avg_time
+from(
+    select
+        '$do_date' dt,
+        sum(payment_count) payment_count,
+        sum(payment_amount) payment_amount,
+        sum(if(payment_count>0, 1, 0)) payment_user_count
+    from dws_user_action_daycount
+    where dt = '$do_date'
+) a
+join(
+    select
+        '$do_date' dt,
+        sum(if(payment_amount>0, 1, 0)) payment_sku_count
+    from dws_sku_action_daycount
+    where dt = '$do_date'
+) b on a.dt = b.dt
+join(
+    select
+        '$do_date' dt,
+        sum(unix_timestamp(payment_time) - unix_timestamp(create_time))/count(*)/60 payment_avg_time
+        -- 这样应该也行吧
+        -- avg(unix_timestamp(payment_time) - unix_timestamp(create_time))/60 payment_avg_time
+    from dwd_fact_order_info
+    where dt = '$do_date' and payment_time is not null
+) c on a.dt = c.dt;
+"
+
+# 复购率
+insert_ads_sale_tm_category1_stat_mn="
+insert into table ads_sale_tm_category1_stat_mn
+select
+    sku_tm_id,
+    sku_category1_id,
+    sku_category1_name,
+    sum(if(order_count>=1, 1, 0)) buycount,
+    sum(if(order_count>=2, 1, 0)) buy_twice_last,
+    sum(if(order_count>=2, 1, 0))/sum(if(order_count>=1, 1, 0)) buy_twice_last_ratio,
+    sum(if(order_count>=3, 1, 0)) buy_3times_last,
+    sum(if(order_count>=3, 1, 0))/sum(if(order_count>=1, 1, 0)) buy_3times_last_ratio,
+    date_format('$do_date', 'yyyy-MM') stat_mn,
+    '$do_date' stat_date
+from(
+    -- 每个用户的购买次数
+    select
+        sku_tm_id,
+        sku_category1_id,
+        sku_category1_name,
+        user_id,
+        sum(order_count) order_count
+    from dws_sale_detail_daycount
+    where dt >= date_format('$do_date', 'yyyy-MM-01') and dt <= last_day('$do_date')
+    group by sku_tm_id,sku_category1_id,sku_category1_name,user_id
+) t
+group by sku_tm_id,sku_category1_id,sku_category1_name;
+"
+
+sql="
+use $hive_db;
+
+-- insert_table: 活跃设备数（日、周、月）
+$insert_ads_uv_count
+
+-- insert_table: 每日新增设备
+$insert_ads_new_mid_count
+
+-- insert_table: 沉默用户数
+$insert_ads_silent_count
+
+-- insert_table: 本周回流用户数
+$insert_ads_back_count
+
+-- insert_table: 流失用户数
+$insert_ads_wastage_count
+
+-- insert_table: 留存率
+$insert_ads_user_retention_day_rate
+
+-- insert_table: 最近连续三周活跃用户数
+$insert_ads_continuity_wk_count
+
+-- insert_table: 最近七天内连续三天活跃用户数
+$insert_ads_continuity_uv_count
+
+-- insert_table: 会员主题信息
+$insert_ads_user_topic
+
+-- insert_table: 漏斗分析
+$insert_ads_user_action_convert_day
+
+-- insert_table: 商品个数信息
+$insert_ads_product_info
+
+-- insert_table: 商品销量排名
+$insert_ads_product_sale_topN
+
+-- insert_table: 商品收藏排名
+$insert_ads_product_favor_topN
+
+-- insert_table: 商品加入购物车排名
+$insert_ads_product_cart_topN
+
+-- insert_table: 商品退款率排名(最近30天)
+$insert_ads_product_refund_topN
+
+-- insert_table: 商品差评率排名
+$insert_ads_appraise_bad_topN
+
+-- insert_table: 下单数目统计
+$insert_ads_order_daycount
+
+-- insert_table: 支付信息统计
+$insert_ads_payment_daycount
+
+-- insert_table: 复购率
+$insert_ads_sale_tm_category1_stat_mn
+"
+
+#echo "$sql"
+
+$hive -e "$sql"
+```
+
+脚本测试：
+```
+[hadoop@hadoop101 hive-mr-script]$ ./dws_dwt_to_ads.sh 2020-03-11
+```
+
+
+查看导入数据
+```sql
+/opt/module/hive-2.3.6/bin/hive -e "select * from gmall.ads_sale_tm_category1_stat_mn limit 5;"
 ```
 
