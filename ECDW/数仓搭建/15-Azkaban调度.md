@@ -123,7 +123,56 @@ Hive中的Null在底层是以“\N”来存储，而MySQL中的Null在底层就�
 ```
 
 ## 任务调度
+需要调度的脚本：
+```sh
+# 用sqoop把mysql导入数据到hdfs
+mysql_to_hdfs.sh all 2020-03-11
 
+# hdfs数据剪切到hive的ods层
+hdfs_to_ods_log.sh  2020-03-11
+hdfs_to_ods_db.sh all 2020-03-11
+
+# ods层加载到dwd
+ods_to_dwd_start_log.sh 2020-03-11
+ods_to_dwd_base_event_log.sh 2020-03-11
+ods_to_dwd_detail_event_log.sh 2020-03-11
+ods_to_dwd_db.sh 2020-03-11
+
+# dwd到dws
+dwd_to_dws.sh 2020-03-11
+# dws到dwt
+dws_to_dwt.sh 2020-03-11
+
+# ads层出统计结果
+dws_dwt_to_ads.sh 2020-03-11
+
+# 用sqoop把ads层统计结果导出到mysql
+sqoop_export.sh all
+```
+
+创建各个job：
+```sh
+lifengchao@lifengchao-YangTianM4601c-00:~/codes/ecdwFlow$ ll
+总用量 52
+drwxr-xr-x 2 lifengchao lifengchao 4096 7月  21 13:46 ./
+drwxr-xr-x 7 lifengchao lifengchao 4096 7月  21 12:41 ../
+-rw-r--r-- 1 lifengchao lifengchao  274 7月  21 14:04 ads_to_mysql.job
+-rw-r--r-- 1 lifengchao lifengchao  327 7月  21 14:01 dwd_to_dws.job
+-rw-r--r-- 1 lifengchao lifengchao  283 7月  21 14:03 dws_dwt_to_ads.job
+-rw-r--r-- 1 lifengchao lifengchao  275 7月  21 14:02 dws_to_dwt.job
+-rw-r--r-- 1 lifengchao lifengchao  322 7月  21 13:55 hdfs_to_ods_db.job
+-rw-r--r-- 1 lifengchao lifengchao  262 7月  21 13:51 hdfs_to_ods_log.job
+-rw-r--r-- 1 lifengchao lifengchao  252 7月  21 13:43 mysql_to_hdfs.job
+-rw-r--r-- 1 lifengchao lifengchao  311 7月  21 13:58 ods_to_dwd_base_event_log.job
+-rw-r--r-- 1 lifengchao lifengchao  285 7月  21 13:58 ods_to_dwd_db.job
+-rw-r--r-- 1 lifengchao lifengchao  325 7月  21 13:59 ods_to_dwd_detail_event_log.job
+-rw-r--r-- 1 lifengchao lifengchao  334 7月  21 13:55 ods_to_dwd_start_log.job
+```
+
+打包：
+```sh
+zip ecdwFlowJobs.zip *.job
+```
 
 
 ```sql
