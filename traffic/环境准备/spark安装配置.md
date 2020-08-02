@@ -75,9 +75,9 @@ bin/spark-shell \
 测试：
 ```
 [hadoop@hadoop101 spark-2.2.0-bin-hadoop2.7]$ bin/spark-shell \
-> --master yarn \
-> --deploy-mode client \
-> --jars /opt/module/hadoop-2.7.2/share/hadoop/common/hadoop-lzo-0.4.20.jar
+--master yarn \
+--deploy-mode client \
+--jars /opt/module/hadoop-2.7.2/share/hadoop/common/hadoop-lzo-0.4.20.jar
 Setting default log level to "WARN".
 To adjust logging level use sc.setLogLevel(newLevel). For SparkR, use setLogLevel(newLevel).
 20/08/03 07:56:57 WARN util.NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
@@ -103,6 +103,18 @@ scala> rdd.take(3).foreach(println)
 2019-01-01	1	3	1	1	1	2019	0	0
 2019-01-02	1	4	2	1	1	2019	0	0
 2019-01-03	1	5	3	1	1	2019	0	0
+
+scala> rdd.map(line => (line.split("\t")(0).substring(5,7), 1)).reduceByKey(_+_, 2).take(10).foreach(println)
+(06,60)                                                                         
+(02,57)
+(04,60)
+(11,60)
+(08,62)
+(09,60)
+(03,62)
+(07,62)
+(12,62)
+(05,62)
 
 scala> spark.sql("show databases").show();
 +------------+
@@ -228,6 +240,16 @@ scala> spark.sql("select * from dws_user_action_daycount").show()
 |   1021|          1|         0|        0.0|          0|        0.00|            0|          0.00|2020-03-11|
 +-------+-----------+----------+-----------+-----------+------------+-------------+--------------+----------+
 only showing top 20 rows
+
+scala> spark.sql("select dt,count(1) from dws_user_action_daycount group by dt").show()
++----------+--------+                                                           
+|        dt|count(1)|
++----------+--------+
+|2020-03-10|    7000|
+|2020-03-12|    1494|
+|2020-03-11|    7464|
+|2020-03-13|    1480|
++----------+--------+
 
 scala> :quit
 [hadoop@hadoop101 spark-2.2.0-bin-hadoop2.7]$
